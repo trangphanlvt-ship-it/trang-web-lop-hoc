@@ -12,12 +12,13 @@ import {
   ArrowRight
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
-import { INITIAL_QUESTION_BANK } from '../lib/curriculumData';
+import { fetchQuestionBank, saveStudentProgress } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
 
 export const InteractiveGame = ({ subjectCode = 'TOAN', onFinishGame }) => {
-  // Filter questions for current subject
-  const questions = INITIAL_QUESTION_BANK.filter(q => q.subject === subjectCode);
-  const currentQuestions = questions.length > 0 ? questions : INITIAL_QUESTION_BANK.slice(0, 3);
+  const { currentStudent } = useAuth();
+  const [currentQuestions, setCurrentQuestions] = useState([]);
+  const [loadingQuestions, setLoadingQuestions] = useState(true);
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState(null);
@@ -28,16 +29,29 @@ export const InteractiveGame = ({ subjectCode = 'TOAN', onFinishGame }) => {
   const [iframeUrl, setIframeUrl] = useState('');
   const [gameMode, setGameMode] = useState('custom_quiz'); // 'custom_quiz' | 'iframe'
 
+  // Fetch Questions from Supabase DB or Fallback
+  useEffect(() => {
+    let isMounted = true;
+    setLoadingQuestions(true);
+    fetchQuestionBank(subjectCode).then((qData) => {
+      if (isMounted) {
+        setCurrentQuestions(qData && qData.length > 0 ? qData : []);
+        setLoadingQuestions(false);
+      }
+    });
+    return () => { isMounted = false; };
+  }, [subjectCode]);
+
   // Live timer
   useEffect(() => {
     let interval;
-    if (!isGameFinished && gameMode === 'custom_quiz') {
+    if (!isGameFinished && gameMode === 'custom_quiz' && !loadingQuestions) {
       interval = setInterval(() => {
         setTimerSeconds(prev => prev + 1);
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [isGameFinished, gameMode]);
+  }, [isGameFinished, gameMode, loadingQuestions]);
 
   const currentQ = currentQuestions[currentIndex];
 
@@ -63,6 +77,12 @@ export const InteractiveGame = ({ subjectCode = 'TOAN', onFinishGame }) => {
       setIsAnswerSubmitted(false);
     } else {
       setIsGameFinished(true);
+      
+      // Save score to Supabase DB
+      if (currentStudent?.id) {
+        saveStudentProgress(currentStudent.id, score + (selectedOption === currentQ?.correct_answer ? 10 : 0), timerSeconds);
+      }
+
       // Trigger Confetti
       try {
         confetti({
@@ -71,7 +91,7 @@ export const InteractiveGame = ({ subjectCode = 'TOAN', onFinishGame }) => {
           origin: { y: 0.6 }
         });
       } catch (err) {
-        // Fallback if canvas-confetti script isn't loaded
+        // Fallback
       }
       if (onFinishGame) {
         onFinishGame({ score, total: currentQuestions.length * 10, time: timerSeconds });
@@ -87,6 +107,24 @@ export const InteractiveGame = ({ subjectCode = 'TOAN', onFinishGame }) => {
     setTimerSeconds(0);
     setIsGameFinished(false);
   };
+
+  if (loadingQuestions) {
+    return (
+      <div className="w-full bg-white rounded-3xl p-8 shadow-xl border border-rose-100 text-center space-y-3">
+        <div className="w-10 h-10 mx-auto rounded-full border-4 border-rose-600 border-t-transparent animate-spin"></div>
+        <p className="text-xs font-bold text-slate-600">Đang tải ngân hàng câu hỏi từ Supabase DB...</p>
+      </div>
+    );
+  }
+
+  if (!currentQ) {
+    return (
+      <div className="w-full bg-white rounded-3xl p-8 shadow-xl border border-rose-100 text-center space-y-2">
+        <p className="text-sm font-bold text-slate-700">Chưa có câu hỏi cho môn học này trong CSDL.</p>
+        <p className="text-xs text-slate-500">Giáo viên có thể nhập thêm câu hỏi mới từ Bảng điều khiển Admin.</p>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full bg-white rounded-3xl p-6 shadow-xl border border-rose-100 water-ink-border">
@@ -174,7 +212,7 @@ export const InteractiveGame = ({ subjectCode = 'TOAN', onFinishGame }) => {
               CHÚC MỪNG EM ĐÃ HOÀN THÀNH BÀI TẬP!
             </h4>
             <p className="text-xs text-slate-500 mt-1">
-              Điểm số của em đã được ghi nhận vào Bảng vinh danh Lớp 5/4.
+              Kết quả bài làm đã được lưu trực tiếp vào CSDL Supabase Lớp 5/4.
             </p>
           </div>
 

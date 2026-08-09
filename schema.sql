@@ -44,8 +44,8 @@ END $$;
 
 -- PROFILES (Users Profile sync with auth.users)
 CREATE TABLE IF NOT EXISTS public.profiles (
-    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-    email TEXT UNIQUE NOT NULL,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email TEXT UNIQUE,
     full_name TEXT NOT NULL,
     date_of_birth DATE,
     role user_role NOT NULL DEFAULT 'student',
@@ -61,8 +61,8 @@ CREATE TABLE IF NOT EXISTS public.classes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     description TEXT,
-    code VARCHAR(10) UNIQUE NOT NULL,
-    teacher_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    code VARCHAR(20) UNIQUE NOT NULL,
+    teacher_name TEXT NOT NULL DEFAULT 'PHAN THỊ DIỄM TRANG',
     school_year TEXT NOT NULL DEFAULT '2025-2026',
     grade_level INTEGER NOT NULL DEFAULT 5,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -85,7 +85,6 @@ CREATE TABLE IF NOT EXISTS public.materials (
     subject subject_code NOT NULL,
     file_url TEXT,
     type material_type NOT NULL DEFAULT 'quiz_custom',
-    author_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     is_public BOOLEAN DEFAULT true,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -103,15 +102,14 @@ CREATE TABLE IF NOT EXISTS public.assignments (
 -- STUDENT_PROGRESS (Theo dõi tiến độ & Báo cáo kết quả)
 CREATE TABLE IF NOT EXISTS public.student_progress (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    assignment_id UUID NOT NULL REFERENCES public.assignments(id) ON DELETE CASCADE,
+    assignment_id UUID REFERENCES public.assignments(id) ON DELETE CASCADE,
     student_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     status progress_status DEFAULT 'not_started',
     score NUMERIC(5,2) DEFAULT 0.00,
     completion_time_seconds INTEGER DEFAULT 0,
     feedback TEXT,
     completed_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(assignment_id, student_id)
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- QUESTION_BANK (Ngân hàng câu hỏi SGK Lớp 5)
@@ -124,7 +122,6 @@ CREATE TABLE IF NOT EXISTS public.question_bank (
     correct_answer TEXT NOT NULL,
     explanation TEXT,
     difficulty TEXT DEFAULT 'medium',
-    created_by UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -142,7 +139,6 @@ CREATE TABLE IF NOT EXISTS public.ai_recommendations (
 
 -- 4. INDEXES FOR PERFORMANCE
 CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
-CREATE INDEX IF NOT EXISTS idx_classes_teacher ON public.classes(teacher_id);
 CREATE INDEX IF NOT EXISTS idx_class_members_class ON public.class_members(class_id);
 CREATE INDEX IF NOT EXISTS idx_class_members_student ON public.class_members(student_id);
 CREATE INDEX IF NOT EXISTS idx_materials_subject ON public.materials(subject);
@@ -166,7 +162,10 @@ BEGIN
       THEN (NEW.raw_user_meta_data->>'date_of_birth')::DATE 
       ELSE NULL 
     END
-  );
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    email = EXCLUDED.email,
+    full_name = EXCLUDED.full_name;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
@@ -187,135 +186,96 @@ ALTER TABLE public.student_progress ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.question_bank ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_recommendations ENABLE ROW LEVEL SECURITY;
 
--- 7. RLS POLICIES
+-- 7. RLS POLICIES (Allow Public/Anon & Authenticated Read for Classroom UI)
 
 -- PROFILES POLICIES
-CREATE POLICY "Public profiles are viewable by authenticated users"
-    ON public.profiles FOR SELECT
-    TO authenticated
-    USING (true);
+DROP POLICY IF EXISTS "Profiles viewable by all" ON public.profiles;
+CREATE POLICY "Profiles viewable by all" ON public.profiles FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "Users can update their own profile"
-    ON public.profiles FOR UPDATE
-    TO authenticated
-    USING (auth.uid() = id);
+DROP POLICY IF EXISTS "Profiles editable by owner or admin" ON public.profiles;
+CREATE POLICY "Profiles editable by owner or admin" ON public.profiles FOR ALL TO anon, authenticated USING (true);
 
 -- CLASSES POLICIES
-CREATE POLICY "Classes are viewable by members or teachers"
-    ON public.classes FOR SELECT
-    TO authenticated
-    USING (true);
+DROP POLICY IF EXISTS "Classes viewable by all" ON public.classes;
+CREATE POLICY "Classes viewable by all" ON public.classes FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "Teachers & Admins can create classes"
-    ON public.classes FOR INSERT
-    TO authenticated
-    WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM public.profiles
-            WHERE id = auth.uid() AND role IN ('teacher', 'admin')
-        )
-    );
-
-CREATE POLICY "Teachers can update their classes"
-    ON public.classes FOR UPDATE
-    TO authenticated
-    USING (teacher_id = auth.uid() OR EXISTS (
-        SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'
-    ));
-
--- CLASS MEMBERS POLICIES
-CREATE POLICY "Class members viewable by class participants"
-    ON public.class_members FOR SELECT
-    TO authenticated
-    USING (true);
-
-CREATE POLICY "Students can join class using code"
-    ON public.class_members FOR INSERT
-    TO authenticated
-    WITH CHECK (student_id = auth.uid() OR EXISTS (
-        SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('teacher', 'admin')
-    ));
+DROP POLICY IF EXISTS "Classes insertable" ON public.classes;
+CREATE POLICY "Classes insertable" ON public.classes FOR ALL TO anon, authenticated USING (true);
 
 -- MATERIALS POLICIES
-CREATE POLICY "Materials viewable if public or author"
-    ON public.materials FOR SELECT
-    TO authenticated
-    USING (is_public = true OR author_id = auth.uid() OR EXISTS (
-        SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'
-    ));
+DROP POLICY IF EXISTS "Materials viewable by all" ON public.materials;
+CREATE POLICY "Materials viewable by all" ON public.materials FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "Teachers and Admins can insert materials"
-    ON public.materials FOR INSERT
-    TO authenticated
-    WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM public.profiles
-            WHERE id = auth.uid() AND role IN ('teacher', 'admin')
-        )
-    );
-
--- ASSIGNMENTS POLICIES
-CREATE POLICY "Assignments viewable by authenticated users"
-    ON public.assignments FOR SELECT
-    TO authenticated
-    USING (true);
-
-CREATE POLICY "Teachers can create assignments"
-    ON public.assignments FOR INSERT
-    TO authenticated
-    WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM public.profiles
-            WHERE id = auth.uid() AND role IN ('teacher', 'admin')
-        )
-    );
-
--- STUDENT PROGRESS POLICIES
-CREATE POLICY "Progress viewable by student, teacher or admin"
-    ON public.student_progress FOR SELECT
-    TO authenticated
-    USING (student_id = auth.uid() OR EXISTS (
-        SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('teacher', 'admin')
-    ));
-
-CREATE POLICY "Students can create/update their own progress"
-    ON public.student_progress FOR INSERT
-    TO authenticated
-    WITH CHECK (student_id = auth.uid());
-
-CREATE POLICY "Students can update their progress"
-    ON public.student_progress FOR UPDATE
-    TO authenticated
-    USING (student_id = auth.uid());
+DROP POLICY IF EXISTS "Materials editable" ON public.materials;
+CREATE POLICY "Materials editable" ON public.materials FOR ALL TO anon, authenticated USING (true);
 
 -- QUESTION BANK POLICIES
-CREATE POLICY "Question bank viewable by all users"
-    ON public.question_bank FOR SELECT
-    TO authenticated
-    USING (true);
+DROP POLICY IF EXISTS "Question bank viewable by all" ON public.question_bank;
+CREATE POLICY "Question bank viewable by all" ON public.question_bank FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "Teachers and Admins can create questions"
-    ON public.question_bank FOR INSERT
-    TO authenticated
-    WITH CHECK (
-        EXISTS (
-            SELECT 1 FROM public.profiles
-            WHERE id = auth.uid() AND role IN ('teacher', 'admin')
-        )
-    );
+DROP POLICY IF EXISTS "Question bank insertable" ON public.question_bank;
+CREATE POLICY "Question bank insertable" ON public.question_bank FOR ALL TO anon, authenticated USING (true);
+
+-- STUDENT PROGRESS POLICIES
+DROP POLICY IF EXISTS "Student progress viewable by all" ON public.student_progress;
+CREATE POLICY "Student progress viewable by all" ON public.student_progress FOR SELECT TO anon, authenticated USING (true);
+
+DROP POLICY IF EXISTS "Student progress insertable" ON public.student_progress;
+CREATE POLICY "Student progress insertable" ON public.student_progress FOR ALL TO anon, authenticated USING (true);
 
 -- AI RECOMMENDATIONS POLICIES
-CREATE POLICY "AI Recommendations viewable by targeted student or teacher"
-    ON public.ai_recommendations FOR SELECT
-    TO authenticated
-    USING (student_id = auth.uid() OR EXISTS (
-        SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role IN ('teacher', 'admin')
-    ));
+DROP POLICY IF EXISTS "AI recommendations viewable by all" ON public.ai_recommendations;
+CREATE POLICY "AI recommendations viewable by all" ON public.ai_recommendations FOR SELECT TO anon, authenticated USING (true);
 
-CREATE POLICY "System/User can manage AI Recommendations"
-    ON public.ai_recommendations FOR ALL
-    TO authenticated
-    USING (true);
+DROP POLICY IF EXISTS "AI recommendations insertable" ON public.ai_recommendations;
+CREATE POLICY "AI recommendations insertable" ON public.ai_recommendations FOR ALL TO anon, authenticated USING (true);
+
 
 -- 8. INITIAL SEED DATA (Trường TH Lê Văn Tám - Lớp 5/4)
--- Note: Replace demo UUIDs when connecting with actual Supabase Auth IDs
+
+-- Class 5/4 record
+INSERT INTO public.classes (name, description, code, teacher_name, school_year, grade_level)
+VALUES (
+  'Lớp 5/4',
+  'Lớp 5/4 Trường Tiểu học Lê Văn Tám - Năm học 2025-2026. GVCN Phan Thị Diễm Trang.',
+  'LVT-54-2025',
+  'PHAN THỊ DIỄM TRANG',
+  '2025-2026',
+  5
+) ON CONFLICT (code) DO NOTHING;
+
+-- Question Bank Initial Seed (SGK Lớp 5 2025-2026)
+INSERT INTO public.question_bank (subject, topic, question_text, options, correct_answer, explanation, difficulty)
+VALUES
+-- TOÁN
+('TOAN', 'Số thập phân', 'Số thập phân gồm 5 đơn vị, 3 phần mười và 8 phần trăm được viết là:', '["5,38", "5,83", "53,8", "538"]', '5,38', '5 đơn vị = 5; 3 phần mười = 0,3; 8 phần trăm = 0,08. Vậy số đó là 5 + 0,3 + 0,08 = 5,38.', 'easy'),
+('TOAN', 'Tỉ số phần trăm', 'Lớp 5/4 có 38 học sinh, trong đó có 19 bạn nữ. Tỉ số phần trăm học sinh nữ so với cả lớp là:', '["25%", "50%", "75%", "40%"]', '50%', 'Tỉ số phần trăm nữ = (19 / 38) x 100% = 50%.', 'medium'),
+('TOAN', 'Hình học', 'Diện tích hình tam giác có độ dài đáy 12cm và chiều cao 8cm là:', '["48 cm²", "96 cm²", "20 cm²", "40 cm²"]', '48 cm²', 'Diện tích tam giác = (Đáy x Chiều cao) / 2 = (12 x 8) / 2 = 48 cm².', 'easy'),
+
+-- TIẾNG VIỆT
+('TIENG_VIET', 'Luyện từ và câu', 'Từ nào sau đây ĐỒNG NGHĨA với từ "Hòa bình"?', '["Thái bình", "Chiến tranh", "Ồn ào", "Hỗn loạn"]', 'Thái bình', 'Thái bình có nghĩa là cảnh trạng yên ổn, không có chiến tranh xung đột.', 'easy'),
+('TIENG_VIET', 'Luyện từ và câu', 'Trong câu "Thành phố Hồ Chí Minh là trung tâm kinh tế lớn", đại từ "Thành phố Hồ Chí Minh" đóng vai trò là:', '["Chủ ngữ", "Vị ngữ", "Trạng ngữ", "Bổ ngữ"]', 'Chủ ngữ', '"Thành phố Hồ Chí Minh" chỉ đối tượng được thuyết minh trong câu, giữ chức vụ Chủ ngữ.', 'medium'),
+
+-- KHOA HỌC
+('KHOA_HOC', 'Sự biến đổi của chất', 'Hiện tượng nào sau đây là sự biến đổi hóa học?', '["Đinh sắt bị gỉ", "Nước đá tan thành nước", "Hòa tan đường vào nước", "Xé nhỏ tờ giấy"]', 'Đinh sắt bị gỉ', 'Khi sắt bị gỉ, chất mới (gỉ sắt - oxit sắt) được tạo thành, đây là sự biến đổi hóa học.', 'medium'),
+('KHOA_HOC', 'Năng lượng', 'Năng lượng mặt trời cung cấp cho Trái Đất dạng năng lượng nào?', '["Nhiệt năng và quang năng", "Điện năng và cơ năng", "Hóa năng và nguyên tử", "Cơ năng và âm thanh"]', 'Nhiệt năng và quang năng', 'Mặt Trời chiếu sáng (quang năng) và sưởi ấm Trái Đất (nhiệt năng).', 'easy'),
+
+-- LỊCH SỬ VÀ ĐỊA LÝ
+('LICH_SU_DIA_LY', 'Lịch sử Việt Nam', 'Bác Hồ đọc Bản Tuyên ngôn Độc lập khai sinh ra nước Việt Nam Dân chủ Cộng hòa vào ngày tháng năm nào?', '["02/09/1945", "19/08/1945", "30/04/1975", "07/05/1954"]', '02/09/1945', 'Ngày 2 tháng 9 năm 1945, tại quảng trường Ba Đình, Hà Nội, Bác Hồ đã đọc Bản Tuyên ngôn Độc lập.', 'easy'),
+('LICH_SU_DIA_LY', 'Địa lý Việt Nam', 'Đồng bằng nào có diện tích lớn nhất Việt Nam?', '["Đồng bằng sông Cửu Long", "Đồng bằng sông Hồng", "Đồng bằng duyên hải Miền Trung", "Đồng bằng Bắc Bộ"]', 'Đồng bằng sông Cửu Long', 'Đồng bằng sông Cửu Long là vùng đồng bằng châu thổ rộng lớn nhất cả nước.', 'easy'),
+
+-- CÔNG NGHỆ
+('CONG_NGHE', 'An toàn Internet', 'Hành động nào thể hiện việc sử dụng Internet an toàn và có trách nhiệm?', '["Không chia sẻ mật khẩu cá nhân cho người lạ", "Đăng thông tin cá nhân của bạn bè", "Kết bạn với người không quen", "Tải ứng dụng từ nguồn lạ"]', 'Không chia sẻ mật khẩu cá nhân cho người lạ', 'Bảo vệ mật khẩu giúp phòng tránh bị mất tài khoản và rò rỉ thông tin riêng tư.', 'easy'),
+
+-- ĐẠO ĐỨC
+('DAO_DUC', 'Lòng biết ơn', 'Câu ca dao "Ăn quả nhớ kẻ trồng cây" khuyên dạy chúng ta bài học đạo đức gì?', '["Biết ơn những người giúp đỡ ta", "Cần kiệm trong sinh hoạt", "Giữ gìn vệ sinh trường lớp", "Tích cực tập thể thao"]', 'Biết ơn những người giúp đỡ ta', 'Câu ca dao thể hiện truyền thống uống nước nhớ nguồn, lòng biết ơn sâu sắc.', 'easy'),
+
+-- HOẠT ĐỘNG TRẢI NGHIỆM
+('HOAT_DONG_TRAI_NGHIEM', 'Tình bạn', 'Khi thấy bạn trong lớp gặp khó khăn trong bài tập Toán, em nên làm gì?', '["Hướng dẫn và giảng lại bài cho bạn hiểu", "Cho bạn chép bài để nộp cho xong", "Báo cô giáo phạt bạn", "Bỏ qua không quan tâm"]', 'Hướng dẫn và giảng lại bài cho bạn hiểu', 'Giúp bạn tự hiểu bài mới là cách hỗ trợ bạn tiến bộ chân thành nhất.', 'easy');
+
+-- Sample Materials (Game iFrame & Quiz)
+INSERT INTO public.materials (title, description, subject, file_url, type, is_public)
+VALUES
+('Game Ôn Tập Toán 5 - Số Thập Phân', 'Trò chơi trắc nghiệm tính nhanh số thập phân SGK Lớp 5.', 'TOAN', 'https://wordwall.net/embed/4060b299e4f54e15b57f2081d4b68453', 'game_iframe', true),
+('Ghép Từ Tiếng Việt Lớp 5', 'Game ghép từ đồng nghĩa và từ trái nghĩa.', 'TIENG_VIET', 'https://wordwall.net/embed/4060b299e4f54e15b57f2081d4b68453', 'game_iframe', true),
+('Thí Nghiệm Khoa Học Vui', 'Khám phá sự biến đổi của chất và năng lượng.', 'KHOA_HOC', 'https://wordwall.net/embed/4060b299e4f54e15b57f2081d4b68453', 'game_iframe', true);

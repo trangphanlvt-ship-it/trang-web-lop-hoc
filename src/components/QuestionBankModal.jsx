@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Plus, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import { SUBJECTS_LIST } from '../lib/curriculumData';
+import { addQuestionToBank } from '../lib/supabase';
 
 export const QuestionBankModal = ({ isOpen, onClose, onAddQuestion }) => {
   const [subject, setSubject] = useState('TOAN');
@@ -17,7 +18,7 @@ export const QuestionBankModal = ({ isOpen, onClose, onAddQuestion }) => {
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const newQ = {
       id: `q-custom-${Date.now()}`,
@@ -30,11 +31,13 @@ export const QuestionBankModal = ({ isOpen, onClose, onAddQuestion }) => {
       difficulty,
     };
 
+    await addQuestionToBank(newQ);
+
     if (onAddQuestion) {
       onAddQuestion(newQ);
     }
 
-    setSuccessMsg('Đã thêm thành công câu hỏi mới vào Ngân hàng câu hỏi!');
+    setSuccessMsg('Đã thêm thành công câu hỏi mới vào CSDL Supabase!');
     setTimeout(() => {
       setSuccessMsg('');
       onClose();
@@ -53,7 +56,7 @@ export const QuestionBankModal = ({ isOpen, onClose, onAddQuestion }) => {
             </div>
             <div>
               <h3 className="font-bold text-base font-serif">Nhập Câu Hỏi Mới vào Ngân Hàng</h3>
-              <p className="text-xs text-slate-400">Dành cho Giáo viên Chủ nhiệm & Bộ môn Lớp 5/4</p>
+              <p className="text-xs text-slate-400">Lưu trực tiếp vào CSDL Supabase PostgreSQL</p>
             </div>
           </div>
           <button
