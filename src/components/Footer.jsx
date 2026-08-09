@@ -1,5 +1,5 @@
 import React from 'react';
-import { School, MapPin, Phone, Mail, Heart, Sparkles } from 'lucide-react';
+import { School, MapPin, Heart, Sparkles } from 'lucide-react';
 import { SCHOOL_INFO } from '../lib/curriculumData';
 
 export const Footer = () => {
@@ -41,14 +41,6 @@ export const Footer = () => {
               <li className="flex items-center gap-2">
                 <Heart className="w-4 h-4 text-rose-400 shrink-0" />
                 <span><strong>GVCN:</strong> {SCHOOL_INFO.teacherName}</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <Phone className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span><strong>Điện thoại Văn phòng Trường:</strong> (028) 3771 2345</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <Mail className="w-4 h-4 text-blue-400 shrink-0" />
-                <span><strong>Email Lớp:</strong> lop54.thlevantam@hcm.edu.vn</span>
               </li>
             </ul>
           </div>
