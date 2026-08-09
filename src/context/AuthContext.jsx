@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { supabase } from '../lib/supabase';
 import { CLASS_ROSTER_54, SCHOOL_INFO } from '../lib/curriculumData';
 
 const AuthContext = createContext();
@@ -16,11 +16,8 @@ export const AuthProvider = ({ children }) => {
     return saved ? JSON.parse(saved) : null;
   });
 
-  // Fetch or sync user profile
+  // Fetch or sync user profile from Supabase profiles table
   const fetchProfile = async (userId) => {
-    if (!isSupabaseConfigured()) {
-      return null;
-    }
     try {
       const { data, error } = await supabase
         .from('profiles')
@@ -43,34 +40,30 @@ export const AuthProvider = ({ children }) => {
     let mounted = true;
 
     const initAuth = async () => {
-      if (isSupabaseConfigured()) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user && mounted) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
-        }
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user && mounted) {
+        setUser(session.user);
+        await fetchProfile(session.user.id);
       }
       if (mounted) setLoading(false);
     };
 
     initAuth();
 
-    if (isSupabaseConfigured()) {
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-        if (session?.user) {
-          setUser(session.user);
-          await fetchProfile(session.user.id);
-        } else {
-          setUser(null);
-          setProfile(null);
-        }
-        setLoading(false);
-      });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        setUser(session.user);
+        await fetchProfile(session.user.id);
+      } else {
+        setUser(null);
+        setProfile(null);
+      }
+      setLoading(false);
+    });
 
-      return () => {
-        subscription?.unsubscribe();
-      };
-    }
+    return () => {
+      subscription?.unsubscribe();
+    };
   }, []);
 
   // 1. Học sinh đăng nhập theo Tên + Ngày sinh
@@ -117,37 +110,11 @@ export const AuthProvider = ({ children }) => {
 
   // 2. Giáo viên / Admin / User Đăng nhập qua Supabase Auth
   const loginWithEmail = async (email, password) => {
-    if (!isSupabaseConfigured()) {
-      // Demo authentication simulation when keys are default
-      if (email.includes('teacher') || email.includes('diemtrang')) {
-        const teacherProfile = {
-          id: 'teacher-demo-1',
-          email,
-          full_name: 'PHAN THỊ DIỄM TRANG',
-          role: 'teacher'
-        };
-        setUser({ id: 'teacher-demo-1', email });
-        setProfile(teacherProfile);
-        setRole('teacher');
-        return { error: null };
-      } else if (email.includes('admin')) {
-        const adminProfile = {
-          id: 'admin-demo-1',
-          email,
-          full_name: 'Quản trị viên Hệ thống Lê Văn Tám',
-          role: 'admin'
-        };
-        setUser({ id: 'admin-demo-1', email });
-        setProfile(adminProfile);
-        setRole('admin');
-        return { error: null };
-      }
-    }
-
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+
     if (data?.user) {
       setUser(data.user);
       await fetchProfile(data.user.id);
@@ -155,12 +122,8 @@ export const AuthProvider = ({ children }) => {
     return { data, error };
   };
 
-  // 3. Đăng ký tài khoản
+  // 3. Đăng ký tài khoản trực tiếp trên Supabase Auth Live
   const signUpWithEmail = async (email, password, fullName, userRole = 'student') => {
-    if (!isSupabaseConfigured()) {
-      return { error: { message: "Vui lòng điền VITE_SUPABASE_URL và VITE_SUPABASE_ANON_KEY trong file .env để tạo tài khoản thực tế." } };
-    }
-
     const { data, error } = await supabase.auth.signUp({
       email,
       password,
@@ -172,12 +135,26 @@ export const AuthProvider = ({ children }) => {
       },
     });
 
+    if (data?.user && !error) {
+      // Create profile record in profiles table
+      try {
+        await supabase.from('profiles').insert([{
+          id: data.user.id,
+          email: email,
+          full_name: fullName,
+          role: userRole
+        }]);
+      } catch (err) {
+        console.warn("Profile auto-insert note:", err);
+      }
+    }
+
     return { data, error };
   };
 
   // 4. Đăng xuất
   const logout = async () => {
-    if (isSupabaseConfigured() && user) {
+    if (user) {
       await supabase.auth.signOut();
     }
     setUser(null);
